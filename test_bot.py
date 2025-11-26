@@ -53,12 +53,15 @@ def get_topics_keyboard(subject):
     
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
-# Клавиатура для ответов на вопросы
+# Клавиатура для ответов на вопросы с вариантами (с кнопкой отмены)
 def get_answers_keyboard(options):
     keyboard_buttons = []
     
     for i, option in enumerate(options, 1):
         keyboard_buttons.append([KeyboardButton(text=f"{i}. {option}")])
+    
+    # Добавляем кнопку отмены тестирования
+    keyboard_buttons.append([KeyboardButton(text="Отменить тестирование")])
     
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
@@ -71,6 +74,18 @@ def get_full_answer_keyboard():
         ],
         resize_keyboard=True
     )
+
+# Функция для отмены тестирования
+async def cancel_testing(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    await state.clear()
+    await message.answer(
+        "Тестирование отменено. Используйте /start чтобы начать заново.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    # Очищаем данные пользователя
+    if user_id in user_data:
+        del user_data[user_id]
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -89,11 +104,7 @@ async def process_subject(message: types.Message, state: FSMContext):
     subject = message.text
     
     if subject == "Отмена":
-        await state.clear()
-        await message.answer(
-            "Тестирование отменено. Используйте /start чтобы начать заново.",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await cancel_testing(message, state)
         return
     
     if subject not in tests_database:
@@ -199,13 +210,25 @@ async def process_multiple_choice(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
+    text = message.text
+    
+    # Проверяем, не хочет ли пользователь отменить тестирование
+    if text == "Отменить тестирование":
+        await cancel_testing(message, state)
+        return
+    
     test_data = user_data[user_id]
     current_question_data = test_data['questions'][test_data['current_question']]
     
     # Парсим ответ пользователя
     try:
-        user_answer = int(message.text.split('.')[0]) - 1
+        user_answer = int(text.split('.')[0]) - 1
     except (ValueError, IndexError):
+        await message.answer("Пожалуйста, выберите ответ из предложенных вариантов:")
+        return
+    
+    # Проверяем корректность выбранного варианта
+    if user_answer < 0 or user_answer >= len(current_question_data['options']):
         await message.answer("Пожалуйста, выберите ответ из предложенных вариантов:")
         return
     
@@ -252,14 +275,7 @@ async def process_full_answer(message: types.Message, state: FSMContext):
     text = message.text
     
     if text == "Отменить тестирование":
-        await state.clear()
-        await message.answer(
-            "Тестирование отменено. Используйте /start чтобы начать заново.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        # Очищаем данные пользователя
-        if user_id in user_data:
-            del user_data[user_id]
+        await cancel_testing(message, state)
         return
     
     test_data = user_data[user_id]
