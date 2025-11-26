@@ -19,6 +19,7 @@ class TestStates(StatesGroup):
     choosing_subject = State()
     choosing_topic = State()
     taking_test = State()
+    waiting_for_answer = State()
 
 # Хранение состояния пользователей
 user_data = {}
@@ -60,6 +61,16 @@ def get_answers_keyboard(options):
         keyboard_buttons.append([KeyboardButton(text=f"{i}. {option}")])
     
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+
+# Клавиатура для вопросов с полным ответом
+def get_full_answer_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Пропустить вопрос")],
+            [KeyboardButton(text="Отменить тестирование")]
+        ],
+        resize_keyboard=True
+    )
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -118,14 +129,15 @@ async def process_topic(message: types.Message, state: FSMContext):
         return
     
     # Сохраняем данные теста для пользователя
-    user_id = message.from_user.id # type: ignore
+    user_id = message.from_user.id
     user_data[user_id] = {
         'subject': subject,
         'topic': topic,
         'questions': tests_database[subject][topic].copy(),
         'current_question': 0,
         'score': 0,
-        'total_questions': len(tests_database[subject][topic])
+        'total_questions': len(tests_database[subject][topic]),
+        'user_answers': []  # Для хранения ответов пользователя
     }
     
     # Перемешиваем вопросы
@@ -135,7 +147,7 @@ async def process_topic(message: types.Message, state: FSMContext):
 
 # Начало теста
 async def start_test(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id # type: ignore
+    user_id = message.from_user.id
     if user_id not in user_data:
         await message.answer("Ошибка! Начните тестирование заново с помощью /start")
         await state.clear()
@@ -150,24 +162,38 @@ async def start_test(message: types.Message, state: FSMContext):
     current_question_data = test_data['questions'][test_data['current_question']]
     question_number = test_data['current_question'] + 1
 
-    current_answer = current_question_data['options'][current_question_data['correct']]
-    random.shuffle(current_question_data['options'])
-    for i in range(len(current_question_data['options'])):
-        if current_question_data['options'][i] == current_answer:
-            current_question_data['correct'] = i
-            break
+    # Определяем тип вопроса
+    if 'type' in current_question_data and current_question_data['type'] == 'full_answer':
+        # Вопрос с полным ответом
+        await message.answer(
+            f"📝 Вопрос {question_number}/{test_data['total_questions']} (развернутый ответ):\n\n"
+            f"{current_question_data['question']}\n\n"
+            f"💡 *Подсказка:* {current_question_data.get('hint', 'Постарайтесь дать развернутый и аргументированный ответ.')}\n\n"
+            "Напишите ваш развернутый ответ ниже:",
+            reply_markup=get_full_answer_keyboard(),
+            parse_mode="Markdown"
+        )
+        await state.set_state(TestStates.waiting_for_answer)
+    else:
+        # Вопрос с выбором ответа
+        current_answer = current_question_data['options'][current_question_data['correct']]
+        random.shuffle(current_question_data['options'])
+        for i in range(len(current_question_data['options'])):
+            if current_question_data['options'][i] == current_answer:
+                current_question_data['correct'] = i
+                break
 
-    await message.answer(
-        f"❓ Вопрос {question_number}/{test_data['total_questions']}:\n"
-        f"{current_question_data['question']}",
-        reply_markup=get_answers_keyboard(current_question_data['options'])
-    )
-    await state.set_state(TestStates.taking_test)
+        await message.answer(
+            f"❓ Вопрос {question_number}/{test_data['total_questions']}:\n"
+            f"{current_question_data['question']}",
+            reply_markup=get_answers_keyboard(current_question_data['options'])
+        )
+        await state.set_state(TestStates.taking_test)
 
-# Обработчик ответов на вопросы
+# Обработчик ответов на вопросы с вариантами
 @dp.message(TestStates.taking_test)
-async def process_answer(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id # type: ignore
+async def process_multiple_choice(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
     if user_id not in user_data:
         await message.answer("Ошибка! Начните тестирование заново с помощью /start")
         await state.clear()
@@ -178,7 +204,7 @@ async def process_answer(message: types.Message, state: FSMContext):
     
     # Парсим ответ пользователя
     try:
-        user_answer = int(message.text.split('.')[0]) - 1 # type: ignore
+        user_answer = int(message.text.split('.')[0]) - 1
     except (ValueError, IndexError):
         await message.answer("Пожалуйста, выберите ответ из предложенных вариантов:")
         return
@@ -187,16 +213,107 @@ async def process_answer(message: types.Message, state: FSMContext):
     if user_answer == current_question_data['correct']:
         test_data['score'] += 1
         feedback = "✅ Правильно!"
+        is_correct = True
     else:
         correct_answer = current_question_data['options'][current_question_data['correct']]
         feedback = f"❌ Неправильно. Правильный ответ: {correct_answer}"
+        is_correct = False
+    
+    # Сохраняем ответ пользователя
+    test_data['user_answers'].append({
+        'question': current_question_data['question'],
+        'user_answer': current_question_data['options'][user_answer],
+        'correct_answer': current_question_data['options'][current_question_data['correct']],
+        'is_correct': is_correct,
+        'type': 'multiple_choice'
+    })
     
     # Переходим к следующему вопросу
     test_data['current_question'] += 1
     
     if test_data['current_question'] < test_data['total_questions']:
         await message.answer(feedback)
-        await asyncio.sleep(1)  # Пауза перед следующим вопросом
+        await asyncio.sleep(1)
+        await start_test(message, state)
+    else:
+        await message.answer(feedback)
+        await asyncio.sleep(1)
+        await finish_test(message, state)
+
+# Обработчик полных ответов
+@dp.message(TestStates.waiting_for_answer)
+async def process_full_answer(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in user_data:
+        await message.answer("Ошибка! Начните тестирование заново с помощью /start")
+        await state.clear()
+        return
+    
+    text = message.text
+    
+    if text == "Отменить тестирование":
+        await state.clear()
+        await message.answer(
+            "Тестирование отменено. Используйте /start чтобы начать заново.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        # Очищаем данные пользователя
+        if user_id in user_data:
+            del user_data[user_id]
+        return
+    
+    test_data = user_data[user_id]
+    current_question_data = test_data['questions'][test_data['current_question']]
+    
+    if text == "Пропустить вопрос":
+        feedback = "⏭ Вопрос пропущен."
+        is_correct = False
+        user_answer_text = "Не ответил"
+        score_earned = 0
+    else:
+        # Проверяем ответ по ключевым словам
+        correct_answer = current_question_data['correct_answer']
+        keywords = current_question_data.get('keywords', [])
+        
+        if keywords:
+            # Проверяем наличие ключевых слов в ответе
+            user_answer_lower = text.lower()
+            found_keywords = [kw for kw in keywords if kw.lower() in user_answer_lower]
+            
+            if len(found_keywords) >= len(keywords) * 0.6:  # 60% ключевых слов
+                score_earned = 1
+                test_data['score'] += score_earned
+                is_correct = True
+                feedback = f"✅ Ответ принят! Вы упомянули ключевые моменты: {', '.join(found_keywords)}"
+            else:
+                score_earned = 0
+                is_correct = False
+                feedback = f"❌ Ответ неполный. Ожидалось упоминание: {', '.join(keywords)}"
+        else:
+            # Если нет ключевых слов, всегда считаем правильным
+            score_earned = 1
+            test_data['score'] += score_earned
+            is_correct = True
+            feedback = "✅ Ответ принят!"
+        
+        user_answer_text = text
+    
+    # Сохраняем ответ пользователя
+    test_data['user_answers'].append({
+        'question': current_question_data['question'],
+        'user_answer': user_answer_text,
+        'correct_answer': current_question_data['correct_answer'],
+        'is_correct': is_correct,
+        'type': 'full_answer',
+        'score_earned': score_earned
+    })
+    
+    # Переходим к следующему вопросу
+    test_data['current_question'] += 1
+    
+    if test_data['current_question'] < test_data['total_questions']:
+        await message.answer(feedback)
+        await asyncio.sleep(1)
         await start_test(message, state)
     else:
         await message.answer(feedback)
@@ -205,7 +322,7 @@ async def process_answer(message: types.Message, state: FSMContext):
 
 # Завершение теста
 async def finish_test(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id # type: ignore
+    user_id = message.from_user.id
     if user_id not in user_data:
         await message.answer("Ошибка! Начните тестирование заново с помощью /start")
         await state.clear()
@@ -236,7 +353,21 @@ async def finish_test(message: types.Message, state: FSMContext):
         f"Оценка: {grade}"
     )
     
-    await message.answer(result_message, reply_markup=ReplyKeyboardRemove())
+    # Добавляем детализацию по ответам
+    detail_message = "\n\n📝 Детализация ответов:\n"
+    for i, answer_data in enumerate(test_data['user_answers'], 1):
+        detail_message += f"\n{i}. "
+        if answer_data['type'] == 'full_answer':
+            detail_message += "📝 "
+            status = "✅" if answer_data['is_correct'] else "❌"
+        else:
+            status = "✅" if answer_data['is_correct'] else "❌"
+        
+        # Обрезаем длинный вопрос для читаемости
+        question_preview = answer_data['question'][:40] + "..." if len(answer_data['question']) > 40 else answer_data['question']
+        detail_message += f"{question_preview} - {status}"
+    
+    await message.answer(result_message + detail_message, reply_markup=ReplyKeyboardRemove())
     
     # Предлагаем пройти ещё тест
     await message.answer(
