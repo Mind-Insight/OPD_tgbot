@@ -1,4 +1,5 @@
 # app/database.py
+from bson import ObjectId
 import os
 import random
 from datetime import datetime
@@ -10,7 +11,6 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
 
-# Глобальные переменные для синглтона
 _client = None
 _database = None
 
@@ -147,7 +147,6 @@ async def save_test_session(user_id: int, subject: str, topic: str, questions_da
         "completed_at": None
     })
     
-    # Подготавливаем вопросы (перемешиваем варианты ответов один раз)
     prepared_questions = []
     for q in questions_data:
         q_copy = q.copy()
@@ -159,11 +158,9 @@ async def save_test_session(user_id: int, subject: str, topic: str, questions_da
                 correct_answer_text = options[correct_option_index] if correct_option_index < len(options) else None
                 
                 if correct_answer_text:
-                    # Перемешиваем варианты
                     shuffled_options = options.copy()
                     random.shuffle(shuffled_options)
                     
-                    # Находим новый индекс правильного ответа
                     new_correct_index = shuffled_options.index(correct_answer_text)
                     
                     q_copy['shuffled_options'] = shuffled_options
@@ -171,7 +168,6 @@ async def save_test_session(user_id: int, subject: str, topic: str, questions_da
         
         prepared_questions.append(q_copy)
     
-    # Создаем новую сессию
     session = {
         "user_id": user_id,
         "subject": subject,
@@ -259,3 +255,20 @@ async def get_user_stats(user_id: int):
         "avg_percentage": avg_percentage,
         "best_result": best_result
     }
+
+
+async def get_completed_test_session(session_id: str):
+    """Получить завершенную сессию тестирования по ID"""
+    db = await get_db()
+    sessions_collection = db["test_sessions"]
+    return await sessions_collection.find_one({"_id": session_id})
+
+
+async def get_last_completed_session(user_id: int):
+    """Получить последнюю завершенную сессию пользователя"""
+    db = await get_db()
+    sessions_collection = db["test_sessions"]
+    return await sessions_collection.find_one(
+        {"user_id": user_id, "completed_at": {"$ne": None}},
+        sort=[("completed_at", -1)]
+    )

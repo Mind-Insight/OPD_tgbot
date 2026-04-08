@@ -18,11 +18,13 @@ async def main():
     
     await load_tests_from_dict(tests_database)
     
-    from app.handlers import start, stats, exam
+    from app.handlers import start, stats, exam, callbacks, review
     
     dp.include_router(start.router)
     dp.include_router(stats.router)
     dp.include_router(exam.router)
+    dp.include_router(callbacks.router)
+    dp.include_router(review.router)
     
     print("Бот запущен...")
     await dp.start_polling(bot, skip_updates=True)
