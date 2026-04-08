@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: my_test_bot_mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: pswd
+      MONGO_INITDB_DATABASE: test_bot_db
+    volumes:
+      - mongo_data:/data/db
+    command: --auth
+
+volumes:
+  mongo_data:
