@@ -1,4 +1,12 @@
 ```bash
+git clone https://github.com/Mind-Insight/OPD_tgbot.git
+```
+
+```bash
+cd OPD_tgbot
+```
+
+```bash
 cp .env.example .env
 ```
 
